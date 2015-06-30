@@ -1,0 +1,66 @@
+#definir las interfaces que se van a utilizar
+qface="vlan2"
+#ancho de banda para la interfaz y el enlace de bajada alumnos(vlan2)
+bajada_max="896kbit"
+bajada_usuario="192kbit"
+ceil_usuario="120kbit"
+#############################################################################
+#configuracion inicial de la primera politica(alumnos)
+TCA="tc class add dev $qface" #class
+TFA="tc filter add dev $qface" #filtro
+TQA="tc qdisc add dev $qface" #qdisc
+SFQ="sfq perturb 10" #??? dev de imq lo recomiendo LOL!!
+#############################################################################
+#                            >>vlan2<<
+#elimino qdisc previo de la interfaz
+tc qdisc del dev $qface root
+#genero una root qdisc en br0 (1)
+tc qdisc add dev $qface root handle 1: htb
+#configura una clase parent (2)
+tc class add dev $qface parent 1: classid 1:1 htb rate $bajada_max
+#############################################################################
+#definimos clase 1:10 para limitar velocidad de bajada por usuario
+tc class add dev $qface parent 1:1 classid 1:10 htb rate $bajada_usuario ceil $ceil_usuario
+#############################################################################
+#agregar una por cada clase.
+tc qdisc add dev $qface parent 1:1 handle 10: $SFQ
+tc qdisc add dev $qface parent 1:10 handle 10: $SFQ
+#############################################################################
+#comienzo a filtrar por protocol IP, comenzando en 1:0 lo marcado como 20
+tc filter add dev $qface parent 1:0 prio 2 protocol ip handle 10 fw flowid 1:10
+#############################################################################
+#marcar los paquetes para que se apliquen reglas de filtrado.
+iptables -t mangle -A POSTROUTING -d 192.168.20.0/24 -j MARK --set-mark 10
+#############################################################################
+#                          comienzo filtrado salida
+TCAU="tc class add dev imq0"
+TFAU="tc filter add dev imq0"
+TQAU="tc qdisc add dev imq0"
+#############################################################################
+#Configuracion velocidad de subida del canal y de la clase.
+subida_max="256kbit"
+#maxima velocidad subida por clase
+subida_usuario="128kbit"
+ceil_subida_usuario="196"
+subida_usuario3="256kbit"
+#############################################################################
+insmod imq
+insmod ipt_IMQ
+ip link set imq0 up
+#############################################################################
+#asignar HTB a imq0
+tc qdisc del dev imq0 root
+#creo la poitica raiz
+tc qdisc add dev imq0 root handle 1: htb
+#creo la clase.
+tc class add dev imq0 parent 1: classid 1:1 htb rate $subida_max
+#creo la clase 1:20 para alumnos(vlan2)
+tc class add dev imq0 parent 1:1 classid 1:20 htb rate $subida_usuario
+#############################################################################
+$TQAU parent 1:1 handle 20: $SFQ
+$TQAU parent 1:1 handle 30: $SFQ
+#filtrar paquetes de salida vlan2
+$TFAU parent 1:0 prio 2 protocol ip handle 20 fw flowid 1:20
+#############################################################################
+#marcar paquetes de salida de docentes(vlan2)
+iptables -t mangle -A PREROUTING -s 192.168.20.0/24 -j MARK --set-mark 30
